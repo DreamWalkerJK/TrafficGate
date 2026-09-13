@@ -43,6 +43,12 @@ ScaffoldingReadMe.txt
 ~$*
 *~
 CodeCoverage/
+TrafficGate/data/
+data/
+*.db
+*.db-shm
+*.db-wal
+*.log
 
 # MSBuild Binary and Structured Log
 *.binlog

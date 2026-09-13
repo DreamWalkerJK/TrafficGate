@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Service
+metadata: { name: trafficgate }
+spec:
+  type: {{ .Values.service.type }}
+  selector: { app: trafficgate }
+  ports: [{ name: http, port: {{ .Values.service.port }}, targetPort: 5080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: trafficgate }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: trafficgate } }
+  template:
+    metadata: { labels: { app: trafficgate } }
+    spec:
+      containers:
+      - name: trafficgate
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports: [{ containerPort: 5080 }]
+        readinessProbe: { httpGet: { path: /health/ready, port: 5080 } }
+        livenessProbe: { httpGet: { path: /health/live, port: 5080 } }
+        resources: {{- toYaml .Values.resources | nindent 10 }}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "trafficgate-smoke"
+  annotations: { "helm.sh/hook": test }
+spec:
+  restartPolicy: Never
+  containers:
+  - name: smoke
+    image: curlimages/curl:8.10.1
+    command: ["curl", "--fail", "http://trafficgate:5080/health/live"]
