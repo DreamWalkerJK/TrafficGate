@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="TrafficGate.Tests/TrafficGate.Tests.csproj" />
+  <Project Path="TrafficGate.TestUpstream/TrafficGate.TestUpstream.csproj" />
+  <Project Path="TrafficGate/TrafficGate.csproj" />
+</Solution>

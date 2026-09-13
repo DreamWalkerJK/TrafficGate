@@ -1,0 +1,14 @@
+{
+  "TrafficGate": {
+    "ListenUrl": "http://127.0.0.1:5080",
+    "ManagementUrl": "http://127.0.0.1:5081",
+    "DataPath": "data/trafficgate.db",
+    "Jwt": { "RequireHttpsMetadata": true },
+    "Routes": [
+      { "RouteId": "default", "AllowAnonymous": true, "MatchPath": "/{**catch-all}", "ClusterId": "upstream", "RateLimitPerMinute": 120, "ConcurrencyLimit": 64, "MaxRequestBodyBytes": 10485760, "TimeoutSeconds": 30 }
+    ],
+    "Clusters": [
+      { "ClusterId": "upstream", "LoadBalancingPolicy": "RoundRobin", "Destinations": [ { "DestinationId": "local", "Address": "http://127.0.0.1:5090/" } ] }
+    ]
+  }
+}
