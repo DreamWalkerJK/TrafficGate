@@ -1,0 +1,5 @@
+# Operations
+
+Run the controllable upstream with `dotnet run --project TrafficGate.TestUpstream` and the gateway with `dotnet run --project TrafficGate`. The proxy listens on `http://127.0.0.1:5080`; the sample upstream listens on `http://127.0.0.1:5090`. Check `/health/live`, `/health/ready`, and OpenTelemetry console output. Publish revisions through `/admin/config/publish` with an `If-Match` header and roll back using `/admin/rollback/{revision}`.
+
+For production, place the management API on a separate loopback Kestrel endpoint, supply a real JWT authority/audience, mount `data/` on durable storage, and terminate TLS at a trusted proxy. Single-instance rate limits are process local and are not exact global limits after Kubernetes scaling.

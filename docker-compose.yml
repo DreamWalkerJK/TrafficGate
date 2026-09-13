@@ -1,0 +1,12 @@
+services:
+  trafficgate:
+    build: .
+    ports: ["5080:5080"]
+    volumes: ["trafficgate-data:/app/data"]
+  upstream:
+    build:
+      context: .
+      dockerfile: Dockerfile.upstream
+    ports: ["5090:5090"]
+volumes:
+  trafficgate-data:
