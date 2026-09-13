@@ -1,9 +1,10 @@
 using System.Collections.Concurrent;
 using System.Threading.RateLimiting;
 using Yarp.ReverseProxy.Model;
+using Microsoft.AspNetCore.Authorization;
 
 namespace TrafficGate;
-public sealed class GatewayPolicyMiddleware(RequestDelegate next, GatewayConfigStore store, GatewayLimiter limiter, GatewayMetrics metrics)
+public sealed class GatewayPolicyMiddleware(RequestDelegate next, GatewayConfigStore store, GatewayLimiter limiter, GatewayMetrics metrics, IAuthorizationService authorization)
 {
     public async Task InvokeAsync(HttpContext context)
     {
@@ -11,7 +12,11 @@ public sealed class GatewayPolicyMiddleware(RequestDelegate next, GatewayConfigS
         var route = store.Current?.Definition.Routes.FirstOrDefault(r => r.RouteId == routeId);
         if (route is null) { await next(context); return; }
         if (route.MaxRequestBodyBytes > 0 && context.Request.ContentLength > route.MaxRequestBodyBytes) { await WriteError(context, 413, "request_too_large"); return; }
-        if (route.AuthorizationPolicy is not null && !(context.User.Identity?.IsAuthenticated ?? false)) { await WriteError(context, 401, "authentication_required"); return; }
+        if (route.AuthorizationPolicy is not null)
+        {
+            var result = await authorization.AuthorizeAsync(context.User, null, route.AuthorizationPolicy);
+            if (!result.Succeeded) { await WriteError(context, context.User.Identity?.IsAuthenticated == true ? 403 : 401, "authorization_required"); return; }
+        }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted); timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(route.TimeoutSeconds, 1, 600)));
         var lease = await limiter.AcquireAsync(route, context, timeout.Token);
         if (!lease.IsAcquired) { context.Response.Headers.RetryAfter = "1"; await WriteError(context, 429, lease.Reason ?? "rate_limited"); return; }
