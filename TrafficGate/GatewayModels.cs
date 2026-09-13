@@ -18,6 +18,7 @@ public sealed class GatewayConfigStore
 {
     readonly object gate = new(); readonly string path; public ConfigRevision? Current { get; private set; } public List<ConfigRevision> Revisions { get; } = [];
     public ConfigFailure? LastFailure { get; private set; }
+    int highestRevision;
     readonly IConfiguration configuration;
     public GatewayConfigStore(IOptions<GatewayOptions> options, IConfiguration configuration) { this.configuration = configuration; path = options.Value.DataPath; Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!); Load(); }
     string ConnectionString => $"Data Source={path};Pooling=False";
@@ -32,10 +33,11 @@ public sealed class GatewayConfigStore
             while (reader.Read())
             {
                 var revisionNumber = reader.GetInt32(0);
+                highestRevision = Math.Max(highestRevision, revisionNumber);
                 try
                 {
                     var revision = JsonSerializer.Deserialize<ConfigRevision>(reader.GetString(1));
-                    if (revision is null || revision.Revision != revisionNumber) throw new JsonException("revision snapshot is incomplete");
+                    if (revision is null || revision.Revision != revisionNumber || revision.Definition?.Routes is null || revision.Definition.Clusters is null || GatewayValidation.Validate(revision.Definition).Count > 0) throw new JsonException("revision snapshot is incomplete or invalid");
                     Revisions.Add(revision);
                 }
                 catch (Exception ex) when (ex is JsonException or NotSupportedException)
@@ -45,7 +47,7 @@ public sealed class GatewayConfigStore
         Current = Revisions.LastOrDefault();
         if (Current is null)
         {
-            var initial = configuration.GetSection("TrafficGate").Get<GatewayDefinition>() ?? new(); Current = new(1, "\"bootstrap\"", DateTimeOffset.UtcNow, initial); Revisions.Add(Current); Persist();
+            var initial = configuration.GetSection("TrafficGate").Get<GatewayDefinition>() ?? new(); Current = new(++highestRevision, "\"bootstrap\"", DateTimeOffset.UtcNow, initial); Revisions.Add(Current); Persist();
         }
     }
     void Persist() { using var db = new SqliteConnection(ConnectionString); db.Open(); using var transaction = db.BeginTransaction(); foreach (var revision in Revisions) { using var cmd = db.CreateCommand(); cmd.Transaction = transaction; cmd.CommandText = "INSERT OR IGNORE INTO revisions (revision, snapshot) VALUES ($revision, $snapshot)"; cmd.Parameters.AddWithValue("$revision", revision.Revision); cmd.Parameters.AddWithValue("$snapshot", JsonSerializer.Serialize(revision)); cmd.ExecuteNonQuery(); } transaction.Commit(); }
@@ -55,10 +57,11 @@ public sealed class GatewayConfigStore
         lock (gate)
         {
             if (Current is not null && !string.IsNullOrEmpty(ifMatch) && ifMatch != Current.ETag) { revision = 0; error = "etag_conflict"; return false; }
-            var candidateRevision = (Current?.Revision ?? 0) + 1;
+            if (GatewayValidation.Validate(definition).Count > 0) { LastFailure = new(DateTimeOffset.UtcNow, null, "invalid_configuration"); revision = 0; error = "invalid_configuration"; return false; }
+            var candidateRevision = highestRevision + 1;
             var candidate = new ConfigRevision(candidateRevision, '"' + Convert.ToHexString(RandomNumberGenerator.GetBytes(8)) + '"', DateTimeOffset.UtcNow, definition);
             Revisions.Add(candidate);
-            try { Persist(); Current = candidate; LastFailure = null; revision = candidateRevision; error = null; return true; }
+            try { Persist(); Current = candidate; highestRevision = candidateRevision; LastFailure = null; revision = candidateRevision; error = null; return true; }
             catch (Exception) { Revisions.Remove(candidate); LastFailure = new(DateTimeOffset.UtcNow, candidateRevision, "persistence_failed"); revision = 0; error = "persistence_failed"; return false; }
         }
     }
