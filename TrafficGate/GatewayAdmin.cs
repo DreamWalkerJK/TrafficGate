@@ -19,12 +19,20 @@ public static class GatewayAdmin
             return Results.Ok(store.RedactedCurrent());
         });
         admin.MapGet("/revisions", (GatewayConfigStore store) => Results.Ok(store.Revisions));
+        admin.MapGet("/audit", (GatewayConfigStore store) => Results.Ok(store.Audit()));
+        admin.MapGet("/config/failure", (GatewayConfigStore store) => Results.Ok(new { failure = store.LastFailure }));
         admin.MapGet("/metrics", (GatewayMetrics metrics) => Results.Text(metrics.Snapshot(), "text/plain"));
         admin.MapGet("/health", () => Results.Ok(UpstreamHealthRegistry.Shared.Snapshot()));
         admin.MapPost("/config/validate", (GatewayDefinition definition) =>
         {
             var errors = GatewayValidation.Validate(definition);
             return errors.Count == 0 ? Results.Ok(new { valid = true }) : Results.BadRequest(new { valid = false, errors });
+        });
+        admin.MapPost("/config/diff", (GatewayDefinition definition, GatewayConfigStore store) =>
+        {
+            var errors = store.Validate(definition);
+            if (errors.Count > 0) return Results.BadRequest(new { valid = false, errors });
+            return Results.Ok(new { valid = true, differences = store.Diff(definition) });
         });
         admin.MapPost("/config/publish", (HttpContext context, GatewayDefinition definition, GatewayConfigStore store,
             DynamicProxyConfigProvider provider, GatewayMetrics metrics) =>
