@@ -1,7 +1,10 @@
 services:
   trafficgate:
     build: .
-    ports: ["5080:5080"]
+    environment:
+      TrafficGate__ListenUrl: http://0.0.0.0:5080
+      TrafficGate__ManagementUrl: http://0.0.0.0:5081
+    ports: ["5080:5080", "127.0.0.1:5081:5081"]
     volumes: ["trafficgate-data:/app/data"]
   upstream:
     build:

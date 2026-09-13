@@ -1,0 +1,399 @@
+@page "/admin/ui"
+@attribute [Authorize(Policy = GatewayAuthentication.AdminPolicy)]
+@inject GatewayConfigStore ConfigStore
+
+<PageTitle>TrafficGate / Operations</PageTitle>
+
+@{
+    var currentRevision = ConfigStore.Current;
+    var definition = currentRevision?.Definition ?? new GatewayDefinition();
+    var auditEntries = ConfigStore.Audit(25);
+    var health = UpstreamHealthRegistry.Shared.Snapshot();
+}
+
+<div class="shell">
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark" aria-hidden="true">TG</span>
+            <span class="brand-name">TrafficGate</span>
+            <span class="brand-subtitle">operations workspace</span>
+        </div>
+        <div class="topbar-meta">
+            <strong>Management plane</strong>
+            <span>Changes are validated and audited before activation</span>
+        </div>
+    </header>
+
+    <main class="workspace">
+        <div class="intro">
+            <div>
+                <div class="eyebrow">Gateway configuration</div>
+                <h1>Keep traffic moving.</h1>
+                <p>Review the active snapshot, stage a precise change, then publish it against the revision you inspected.</p>
+            </div>
+            <div class="identity">
+                Signed in as<br />
+                <strong>@ActorName</strong>
+                @if (HttpContext?.Connection.LocalPort is int port)
+                {
+                    <span class="muted"> · management port @port</span>
+                }
+            </div>
+        </div>
+
+        @if (Message is not null)
+        {
+            <div class="notice @(MessageIsError ? "error" : "success")" role="status">@Message</div>
+        }
+        @if (ValidationErrors.Count > 0)
+        {
+            <div class="notice error" role="alert">
+                <strong>Configuration needs attention.</strong>
+                <ul>
+                    @foreach (var validationError in ValidationErrors)
+                    {
+                        <li>@validationError</li>
+                    }
+                </ul>
+            </div>
+        }
+
+        <section class="grid" aria-label="Configuration summary">
+            <div class="stat"><span class="stat-label">Active revision</span><span class="stat-value">@(currentRevision?.Revision.ToString() ?? "—")</span><span class="stat-note">atomic runtime snapshot</span></div>
+            <div class="stat"><span class="stat-label">Routes</span><span class="stat-value">@definition.Routes.Count</span><span class="stat-note">host, path and method matches</span></div>
+            <div class="stat"><span class="stat-label">Clusters</span><span class="stat-value">@definition.Clusters.Count</span><span class="stat-note">configured upstream pools</span></div>
+            <div class="stat"><span class="stat-label">Last config issue</span><span class="stat-value">@(ConfigStore.LastFailure is null ? "None" : "Review")</span><span class="stat-note">@(ConfigStore.LastFailure?.Reason ?? "No failed publish recorded")</span></div>
+        </section>
+
+        <section class="panel" aria-labelledby="routes-heading">
+            <div class="panel-heading">
+                <div><h2 id="routes-heading">Routes</h2><p>Each route points to one named cluster and carries its own traffic guardrails.</p></div>
+                <span class="pill">@definition.Routes.Count configured</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <caption class="sr-only">Configured TrafficGate routes</caption>
+                    <thead><tr><th>Route</th><th>Match</th><th>Cluster</th><th>Authorization</th><th>Protection</th><th>Observed health</th></tr></thead>
+                    <tbody>
+                        @if (definition.Routes.Count == 0)
+                        {
+                            <tr><td colspan="6" class="muted">No routes are configured. Add one in the JSON editor below.</td></tr>
+                        }
+                        @foreach (var route in definition.Routes.OrderBy(x => x.Priority).ThenBy(x => x.RouteId, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <tr>
+                                <td><strong>@route.RouteId</strong><br /><span class="muted">priority @route.Priority</span></td>
+                                <td><code>@route.MatchPath</code><br /><span class="muted">@(route.Methods.Length == 0 ? "any method" : string.Join(", ", route.Methods))@(route.Hosts.Length == 0 ? "" : " · " + string.Join(", ", route.Hosts))</span></td>
+                                <td><code>@route.ClusterId</code></td>
+                                <td>
+                                    @if (route.AllowAnonymous)
+                                    { <span class="pill ok">anonymous</span> }
+                                    else if (string.IsNullOrWhiteSpace(route.AuthorizationPolicy))
+                                    { <span class="pill warn">authenticated</span> }
+                                    else
+                                    { <span class="pill">@route.AuthorizationPolicy</span> }
+                                </td>
+                                <td><span class="mono">@route.RateLimitPerMinute/min</span><br /><span class="muted">@route.ConcurrencyLimit concurrent · @route.TimeoutSeconds s timeout</span></td>
+                                <td>
+                                    @if (health.TryGetValue(route.RouteId, out var routeHealth))
+                                    {
+                                        <span class="pill @(routeHealth.Healthy ? "ok" : "error")">@(routeHealth.Healthy ? "healthy" : "degraded")</span>
+                                        <div class="muted">@routeHealth.ConsecutiveFailures failures</div>
+                                    }
+                                    else
+                                    { <span class="pill ok">no failures</span> }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel" aria-labelledby="clusters-heading">
+            <div class="panel-heading">
+                <div><h2 id="clusters-heading">Clusters and destinations</h2><p>Addresses are administrator supplied and never accepted from a proxy request.</p></div>
+                <span class="pill">@definition.Clusters.Sum(x => x.Destinations.Count) destinations</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <caption class="sr-only">Configured TrafficGate upstream clusters</caption>
+                    <thead><tr><th>Cluster</th><th>Destinations</th><th>Transport</th><th>Health</th><th>Connection limits</th></tr></thead>
+                    <tbody>
+                        @if (definition.Clusters.Count == 0)
+                        {
+                            <tr><td colspan="5" class="muted">No clusters are configured.</td></tr>
+                        }
+                        @foreach (var cluster in definition.Clusters.OrderBy(x => x.ClusterId, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <tr>
+                                <td><strong>@cluster.ClusterId</strong><br /><span class="muted">@cluster.LoadBalancingPolicy</span></td>
+                                <td>
+                                    @foreach (var destination in cluster.Destinations)
+                                    { <div><code>@destination.DestinationId</code> <span class="muted">@destination.Address</span></div> }
+                                    @if (cluster.Destinations.Count == 0) { <span class="failure">none</span> }
+                                </td>
+                                <td><span class="mono">HTTP @cluster.HttpVersion</span><br /><span class="muted">@cluster.HttpVersionPolicy</span></td>
+                                <td>
+                                    @if (cluster.ActiveHealthEnabled) { <span class="pill ok">active · @cluster.HealthPath</span> } else { <span class="pill warn">active checks off</span> }
+                                    @if (cluster.PassiveHealthEnabled) { <div class="muted">passive enabled</div> }
+                                </td>
+                                <td><span class="mono">@cluster.MaxConnectionsPerServer/server</span><br /><span class="muted">connect @cluster.ConnectTimeoutSeconds s · activity @cluster.ActivityTimeoutSeconds s</span></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel" aria-labelledby="policies-heading">
+            <div class="panel-heading">
+                <div><h2 id="policies-heading">Authorization references</h2><p>Policies are registered in the host. This page exposes route references without exposing identity provider secrets.</p></div>
+                <span class="pill">@PolicyReferences.Count() referenced</span>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <caption class="sr-only">Authorization policies referenced by routes</caption>
+                    <thead><tr><th>Policy</th><th>Routes using it</th><th>Route behavior</th></tr></thead>
+                    <tbody>
+                        @foreach (var policy in PolicyReferences.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <tr><td><code>@policy</code></td><td>@string.Join(", ", definition.Routes.Where(x => string.Equals(x.AuthorizationPolicy, policy, StringComparison.OrdinalIgnoreCase)).Select(x => x.RouteId))</td><td><span class="muted">Edit the AuthorizationPolicy field in the JSON editor.</span></td></tr>
+                        }
+                        @if (!PolicyReferences.Any())
+                        { <tr><td colspan="3" class="muted">No named policies are referenced. Routes can still require the default authenticated user policy.</td></tr> }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel" aria-labelledby="editor-heading">
+            <div class="panel-heading">
+                <div><h2 id="editor-heading">Stage a configuration</h2><p>Edit the complete detached snapshot. Secrets and credentials are intentionally absent from this document.</p></div>
+                <span class="pill">ETag required</span>
+            </div>
+            <div class="panel-body">
+                <div class="form-grid">
+                    <div>
+                        <EditForm Model="@PreviewForm" FormName="preview-config" OnValidSubmit="@PreviewChanges">
+                            <AntiforgeryToken />
+                            <label for="preview-json">Configuration JSON</label>
+                            <textarea id="preview-json" name="DefinitionJson" spellcheck="false" aria-describedby="json-help">@PreviewForm.DefinitionJson</textarea>
+                            <input type="hidden" name="ExpectedETag" value="@PreviewForm.ExpectedETag" />
+                            <div id="json-help" class="field-help">Keep route and cluster IDs unique. Validation checks match conflicts, target URLs, limits and authorization references.</div>
+                            <div class="button-row" style="margin-top: 14px"><button class="button secondary" type="submit">Preview changes</button></div>
+                        </EditForm>
+                    </div>
+                    <div class="action-column">
+                        <div class="notice"><strong>Current revision</strong><br /><span class="mono">@(currentRevision?.Revision.ToString() ?? "—")</span><br /><span class="muted mono">@(currentRevision?.ETag ?? "No ETag")</span></div>
+                        <EditForm Model="@PublishForm" FormName="publish-config" OnValidSubmit="@PublishChanges">
+                            <AntiforgeryToken />
+                            <input type="hidden" name="DefinitionJson" value="@PublishForm.DefinitionJson" />
+                            <input type="hidden" name="ExpectedETag" value="@PublishForm.ExpectedETag" />
+                            <button class="button" type="submit">Publish configuration</button>
+                            <div class="field-help">The ETag is compared again while publishing. A stale editor receives a conflict and cannot overwrite a newer revision.</div>
+                        </EditForm>
+                        @if (Differences.Count > 0)
+                        {
+                            <div>
+                                <h3>Pending difference</h3>
+                                <ul class="diff-list">
+                                    @foreach (var difference in Differences)
+                                    { <li><span class="pill">@difference.Kind</span><span><strong>@difference.Id</strong><br /><span class="muted">@difference.Change</span></span></li> }
+                                </ul>
+                            </div>
+                        }
+                        else if (HasPreview)
+                        { <div class="notice success">Preview matches the active configuration.</div> }
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" aria-labelledby="history-heading">
+            <div class="panel-heading">
+                <div><h2 id="history-heading">Revision history</h2><p>Rollback creates a new revision, preserving the complete audit trail.</p></div>
+                <span class="pill">@ConfigStore.Revisions.Count revisions</span>
+            </div>
+            <div class="panel-body">
+                <EditForm Model="@RollbackModel" FormName="rollback-config" OnValidSubmit="@RollbackConfiguration">
+                    <AntiforgeryToken />
+                    <div class="button-row">
+                        <div style="min-width: 220px"><label for="rollback-revision">Revision to restore</label><input id="rollback-revision" type="number" name="TargetRevision" min="1" value="@RollbackModel.TargetRevision" /></div>
+                        <input type="hidden" name="ExpectedETag" value="@RollbackModel.ExpectedETag" />
+                        <button class="button danger" type="submit">Create rollback revision</button>
+                    </div>
+                    <div class="field-help">Choose a revision below. The active ETag is checked before the rollback is committed.</div>
+                </EditForm>
+                <div class="table-wrap" style="margin-top: 20px">
+                    <table class="history-table">
+                        <caption class="sr-only">TrafficGate revision history</caption>
+                        <thead><tr><th>Revision</th><th>Created</th><th>ETag</th><th>Contents</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var revision in ConfigStore.Revisions.OrderByDescending(x => x.Revision))
+                            {
+                                <tr><td><strong>@revision.Revision</strong>@if (revision.Revision == currentRevision?.Revision) { <span class="pill ok">active</span> }</td><td>@revision.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</td><td><code>@revision.ETag</code></td><td>@revision.Definition.Routes.Count routes · @revision.Definition.Clusters.Count clusters</td><td><button class="button secondary small" type="button" disabled="@(revision.Revision == currentRevision?.Revision)" title="Enter this revision number in the rollback form above">Select @revision.Revision</button></td></tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel" aria-labelledby="audit-heading">
+            <div class="panel-heading"><div><h2 id="audit-heading">Recent management activity</h2><p>Audit entries contain actor, action, revision and outcome. Secret fields are never recorded.</p></div></div>
+            <div class="table-wrap">
+                <table class="history-table">
+                    <caption class="sr-only">Recent TrafficGate management audit events</caption>
+                    <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Revision</th><th>Result</th></tr></thead>
+                    <tbody>
+                        @foreach (var entry in auditEntries)
+                        { <tr><td>@entry.OccurredAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</td><td>@entry.Actor</td><td>@entry.Action</td><td>@(entry.Revision?.ToString() ?? "—")</td><td class="@(entry.Result == "success" ? "" : "failure")">@entry.Result</td></tr> }
+                        @if (auditEntries.Count == 0) { <tr><td colspan="5" class="muted">No management actions recorded yet.</td></tr> }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        <p class="footer-note">Management actions are available only on the dedicated management listener. Proxy traffic cannot reach this workspace.</p>
+    </main>
+</div>
+
+@code {
+    [CascadingParameter] public HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromForm(FormName = "preview-config")]
+    private ConfigurationForm? PreviewFormInput { get; set; }
+
+    [SupplyParameterFromForm(FormName = "publish-config")]
+    private ConfigurationForm? PublishFormInput { get; set; }
+
+    [SupplyParameterFromForm(FormName = "rollback-config")]
+    private RollbackInput? RollbackModelInput { get; set; }
+
+    // Form mapping may intentionally leave the models for the other two forms
+    // null on a post. Accessors keep the render tree safe while preserving the
+    // mapped model for the form that was submitted.
+    private ConfigurationForm PreviewForm => PreviewFormInput ??= new();
+    private ConfigurationForm PublishForm => PublishFormInput ??= new();
+    private RollbackInput RollbackModel => RollbackModelInput ??= new();
+
+    private readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true, PropertyNameCaseInsensitive = true };
+    private readonly List<string> ValidationErrors = [];
+    private IReadOnlyList<ConfigDifference> Differences { get; set; } = [];
+    private bool HasPreview { get; set; }
+    private string? Message { get; set; }
+    private bool MessageIsError { get; set; }
+    private IEnumerable<string> PolicyReferences => ConfigStore.Current?.Definition.Routes
+        .Select(route => route.AuthorizationPolicy)
+        .Where(policy => !string.IsNullOrWhiteSpace(policy))
+        .Select(policy => policy!)
+        .Distinct(StringComparer.OrdinalIgnoreCase) ?? [];
+    private string ActorName => HttpContext?.User.Identity?.Name ?? HttpContext?.User.FindFirst("sub")?.Value ?? "unknown operator";
+
+    protected override void OnInitialized()
+    {
+        var current = ConfigStore.Current;
+        var json = JsonSerializer.Serialize(current?.Definition ?? new GatewayDefinition(), JsonOptions);
+        var etag = current?.ETag ?? string.Empty;
+        PreviewFormInput ??= new ConfigurationForm { DefinitionJson = json, ExpectedETag = etag };
+        PublishFormInput ??= new ConfigurationForm { DefinitionJson = json, ExpectedETag = etag };
+        RollbackModelInput ??= new RollbackInput { ExpectedETag = etag, TargetRevision = current?.Revision ?? 1 };
+    }
+
+    private void PreviewChanges()
+    {
+        ResetResult();
+        if (!TryReadDefinition(PreviewForm.DefinitionJson, out var definition)) return;
+        var errors = ConfigStore.Validate(definition);
+        if (errors.Count > 0) { ValidationErrors.AddRange(errors); return; }
+        try
+        {
+            Differences = ConfigStore.Diff(definition);
+            HasPreview = true;
+            PublishFormInput = new ConfigurationForm { DefinitionJson = PreviewForm.DefinitionJson, ExpectedETag = ConfigStore.Current?.ETag ?? string.Empty };
+            Message = Differences.Count == 0 ? "Preview complete: no route or cluster changes detected." : $"Preview complete: {Differences.Count} route or cluster change(s) ready for review.";
+        }
+        catch (ArgumentException) { ValidationErrors.Add("The candidate configuration could not be compared with the active snapshot."); }
+    }
+
+    private void PublishChanges()
+    {
+        ResetResult();
+        if (!TryReadDefinition(PublishForm.DefinitionJson, out var definition)) return;
+        var errors = ConfigStore.Validate(definition);
+        if (errors.Count > 0) { ValidationErrors.AddRange(errors); return; }
+        if (!ConfigStore.TryPublish(definition, PublishForm.ExpectedETag, ActorName, out var revision, out var error))
+        {
+            MessageIsError = true;
+            Message = error == "etag_conflict" ? "Publish refused: the active revision changed. Reload this page, review the new snapshot, and try again." : $"Publish refused: {ReadableError(error)}.";
+            return;
+        }
+        Message = $"Revision {revision} published and activated.";
+        SyncFormsToCurrent();
+    }
+
+    private void RollbackConfiguration()
+    {
+        ResetResult();
+        if (!ConfigStore.TryRollback(RollbackModel.TargetRevision, RollbackModel.ExpectedETag, ActorName, out var revision, out var error))
+        {
+            MessageIsError = true;
+            Message = error == "etag_conflict" ? "Rollback refused: the active revision changed. Reload this page before retrying." : $"Rollback refused: {ReadableError(error)}.";
+            return;
+        }
+        Message = $"Rollback committed as new revision {revision}.";
+        SyncFormsToCurrent();
+    }
+
+    private bool TryReadDefinition(string? json, out GatewayDefinition definition)
+    {
+        definition = new GatewayDefinition();
+        if (string.IsNullOrWhiteSpace(json)) { ValidationErrors.Add("Configuration JSON is required."); return false; }
+        try
+        {
+            definition = JsonSerializer.Deserialize<GatewayDefinition>(json, JsonOptions) ?? throw new JsonException("null document");
+            return true;
+        }
+        catch (JsonException) { ValidationErrors.Add("Configuration JSON is not valid. Check braces, quotes and property names."); return false; }
+    }
+
+    private void SyncFormsToCurrent()
+    {
+        var current = ConfigStore.Current;
+        var json = JsonSerializer.Serialize(current?.Definition ?? new GatewayDefinition(), JsonOptions);
+        var etag = current?.ETag ?? string.Empty;
+        PreviewFormInput = new ConfigurationForm { DefinitionJson = json, ExpectedETag = etag };
+        PublishFormInput = new ConfigurationForm { DefinitionJson = json, ExpectedETag = etag };
+        RollbackModelInput = new RollbackInput { ExpectedETag = etag, TargetRevision = current?.Revision ?? 1 };
+        Differences = [];
+        HasPreview = false;
+    }
+
+    private void ResetResult()
+    {
+        Message = null;
+        MessageIsError = false;
+        ValidationErrors.Clear();
+    }
+
+    private static string ReadableError(string? error) => error switch
+    {
+        "revision_not_found" => "that revision does not exist",
+        "invalid_configuration" => "the candidate failed validation",
+        "persistence_failed" => "the configuration could not be durably stored; the active revision remains unchanged",
+        "etag_required" => "an ETag is required",
+        _ => error ?? "an unknown configuration error occurred"
+    };
+
+    private sealed class ConfigurationForm
+    {
+        [Required] public string DefinitionJson { get; set; } = "";
+        [Required] public string ExpectedETag { get; set; } = "";
+    }
+
+    private sealed class RollbackInput
+    {
+        [Range(1, int.MaxValue)] public int TargetRevision { get; set; }
+        [Required] public string ExpectedETag { get; set; } = "";
+    }
+}

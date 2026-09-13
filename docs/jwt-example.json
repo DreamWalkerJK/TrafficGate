@@ -1,0 +1,9 @@
+{
+  "TrafficGate": {
+    "Jwt": {
+      "Authority": "https://identity.example.invalid",
+      "Audience": "trafficgate",
+      "RequireHttpsMetadata": true
+    }
+  }
+}

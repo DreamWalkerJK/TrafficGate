@@ -18,6 +18,11 @@ app.MapGet("/large", () => Results.Text(new string('x', 1024 * 1024)));
 app.MapGet("/sse", async (HttpResponse response, CancellationToken ct) => { response.ContentType = "text/event-stream"; for (var i = 0; i < 5; i++) { await response.WriteAsync($"data: {i}\n\n", ct); await response.Body.FlushAsync(ct); await Task.Delay(250, ct); } });
 app.MapGet("/redirect", () => Results.Redirect("/"));
 app.MapPost("/non-idempotent", () => Results.Json(new { calls = Interlocked.Increment(ref nonIdempotentCalls) }));
+app.MapPost("/non-idempotent/fail", () =>
+{
+    Interlocked.Increment(ref nonIdempotentCalls);
+    return Results.Problem("controlled non-idempotent failure", statusCode: 500);
+});
 app.MapGet("/non-idempotent/count", () => Results.Ok(new { calls = Volatile.Read(ref nonIdempotentCalls) }));
 app.Map("/ws", async context =>
 {

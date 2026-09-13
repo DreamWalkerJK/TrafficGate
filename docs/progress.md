@@ -8,3 +8,5 @@
 - Follow-up commit: `37282b4` (`docs(progress): record initial gateway delivery`) is local and unpushed for the same network reason.
 - Auth fix: `2da5f9f` (`fix(auth): enforce named route policies`) passed tests; push attempted and failed with the same inability to connect to `github.com:443`.
 - Delivered: .NET 10 solution, dynamic route/cluster snapshots, JWT bearer wiring, policy middleware, token bucket and concurrency controls, health endpoints, OpenTelemetry setup, local fault upstream, Docker assets, and baseline documentation.
+
+- Health/config milestone: commits 4f65551 and 213f497 add bounded passive health state, policy snapshot metadata, invalid snapshot skipping, persistence failure rollback, and revision continuity. git ls-remote confirms codex/trafficgate-implementation at 213f497. One direct push attempt timed out against github.com:443; branch now reflects remote hash (likely concurrent retry).
